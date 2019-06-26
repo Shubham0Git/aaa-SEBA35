@@ -405,6 +405,7 @@ public class AaaManager
                         eapPayload, stateMachine.priorityCode());
                 log.info("Send EAP success message to supplicant {}", stateMachine.supplicantAddress().toString());
                 sendPacketToSupplicant(eth, stateMachine.supplicantConnectpoint());
+                aaaStatisticsManager.getAaaStats().increaseAuthSuccessTrans();
 
                 stateMachine.authorizeAccess();
                 aaaStatisticsManager.getAaaStats().increaseAcceptResponsesRx();
@@ -431,6 +432,8 @@ public class AaaManager
                         eapPayload, stateMachine.priorityCode());
                 log.warn("Send EAP failure message to supplicant {}", stateMachine.supplicantAddress().toString());
                 sendPacketToSupplicant(eth, stateMachine.supplicantConnectpoint());
+                aaaStatisticsManager.getAaaStats().increaseauthFailureTrans();
+
                 stateMachine.denyAccess();
                 aaaStatisticsManager.getAaaStats().increaseRejectResponsesRx();
                 break;
@@ -451,12 +454,18 @@ public class AaaManager
         TrafficTreatment treatment = DefaultTrafficTreatment.builder().setOutput(connectPoint.port()).build();
         OutboundPacket packet = new DefaultOutboundPacket(connectPoint.deviceId(),
                                                           treatment, ByteBuffer.wrap(ethernetPkt.serialize()));
+        EAPOL eap = ((EAPOL) ethernetPkt.getPayload());
+        EAP eapPkt = (EAP) eap.getPayload();
         if (log.isTraceEnabled()) {
-            EAPOL eap = ((EAPOL) ethernetPkt.getPayload());
+            log.debug("Sending eapol of type:::" + eapPkt.getDataType());
             log.trace("Sending eapol payload {} enclosed in {} to supplicant at {}",
                       eap, ethernetPkt, connectPoint);
         }
         packetService.emit(packet);
+        byte dataType = eapPkt.getDataType();
+        if (dataType ==  EAP.ATTR_MD5 || dataType == EAP.ATTR_TLS) {
+            aaaStatisticsManager.getAaaStats().increaseEapPktTxauthEap();
+        }
     }
 
     @Override
@@ -556,7 +565,7 @@ public class AaaManager
                     log.debug("EAP packet: EAPOL_START");
                     stateMachine.setSupplicantConnectpoint(inPacket.receivedFrom());
                     stateMachine.start();
-
+                    aaaStatisticsManager.getAaaStats().increaseStartReqTrans();
                     //send an EAP Request/Identify to the supplicant
                     EAP eapPayload = new EAP(EAP.REQUEST, stateMachine.identifier(), EAP.ATTR_IDENTITY, null);
                     if (ethPkt.getVlanID() != Ethernet.VLAN_UNTAGGED) {
@@ -568,7 +577,6 @@ public class AaaManager
 
                     stateMachine.setSupplicantAddress(srcMac);
                     stateMachine.setVlanId(ethPkt.getVlanID());
-
                     log.debug("Getting EAP identity from supplicant {}", stateMachine.supplicantAddress().toString());
                     sendPacketToSupplicant(eth, stateMachine.supplicantConnectpoint());
 
@@ -577,6 +585,7 @@ public class AaaManager
                     log.debug("EAP packet: EAPOL_LOGOFF");
                     if (stateMachine.state() == StateMachine.STATE_AUTHORIZED) {
                         stateMachine.logoff();
+                        aaaStatisticsManager.getAaaStats().increaseEapolLogoffRx();
                     }
 
                     break;
@@ -598,7 +607,7 @@ public class AaaManager
                             radiusPayload.addMessageAuthenticator(AaaManager.this.radiusSecret);
 
                             sendRadiusPacket(radiusPayload, inPacket);
-
+                            aaaStatisticsManager.getAaaStats().increaseAtrrIdentity();
                             // change the state to "PENDING"
                             if (stateMachine.state() == StateMachine.STATE_PENDING) {
                                 aaaStatisticsManager.getAaaStats().increaseRequestReTx();
@@ -624,6 +633,7 @@ public class AaaManager
                                 }
                                 radiusPayload.addMessageAuthenticator(AaaManager.this.radiusSecret);
                                 sendRadiusPacket(radiusPayload, inPacket);
+                                aaaStatisticsManager.getAaaStats().increaseMd5RspChall();
                             }
                             break;
                         case EAP.ATTR_TLS:
@@ -640,6 +650,7 @@ public class AaaManager
 
                             radiusPayload.addMessageAuthenticator(AaaManager.this.radiusSecret);
                             sendRadiusPacket(radiusPayload, inPacket);
+                            aaaStatisticsManager.getAaaStats().increaseTlsRespChall();
 
                             if (stateMachine.state() != StateMachine.STATE_PENDING) {
                                 stateMachine.requestAccess();
@@ -654,6 +665,8 @@ public class AaaManager
                 default:
                     log.debug("Skipping EAPOL message {}", eapol.getEapolType());
             }
+            aaaStatisticsManager.getAaaStats().countTransRespNotNak();
+            aaaStatisticsManager.getAaaStats().countEapolResIdentityMsgTrans();
         }
     }
 
@@ -783,6 +796,18 @@ public class AaaManager
             log.debug("RequestRttMilis---" + aaaStatisticsManager.getAaaStats().getRequestRttMilis());
             log.debug("UnknownServerRx---" + aaaStatisticsManager.getAaaStats().getUnknownServerRx());
             log.debug("UnknownTypeRx---" + aaaStatisticsManager.getAaaStats().getUnknownTypeRx());
+            log.debug("countLogoffDis---" + aaaStatisticsManager.getAaaStats().getEapolLogoffRx());
+            log.debug("countAuthedSuccess---" + aaaStatisticsManager.getAaaStats().getAuthSuccessTrans());
+            log.debug("countTransitionFailedAbort---" +
+            aaaStatisticsManager.getAaaStats().getAuthFailureTrans());
+            log.debug("countTransitionConnectingStartReq---" +
+            aaaStatisticsManager.getAaaStats().getStartReqTrans());
+            log.debug("CountTransitionRespNotNak---" +
+            aaaStatisticsManager.getAaaStats().getTransRespNotNak());
+            log.debug("CountEapReqPktsSentAuthByEap---" +
+            aaaStatisticsManager.getAaaStats().getEapPktTxauthEap());
+            log.debug("countAuthTransitionEapIdentity---" +
+            aaaStatisticsManager.getAaaStats().getEapolResIdentityMsgTrans());
             aaaStatisticsManager.getStatsDelegate().
                 notify(new AuthenticationStatisticsEvent(AuthenticationStatisticsEvent.Type.STATS_UPDATE,
                     aaaStatisticsManager.getAaaStats()));
